@@ -4,6 +4,7 @@ from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
 import time
 import pickle
+import os
 
 
 file_key = 'papers_key.xlsx'
@@ -57,24 +58,38 @@ def click_with_check_bot(b, ele, df, fn):
 
 
 def citations_google(fn, b=None):
-    file_to_save = 'updated_citations_2.xlsx'
+    file_to_save = 'final.xlsx'
 
     if not b:
         b = webdriver.Chrome()
     b.get('https://scholar.google.com.hk/')
-    with open('cookies.pickle', 'rb') as f:
-        cookies = pickle.load(f)
-    for c in cookies:
-        b.add_cookie(c)
+    if 'cookies.pickle' in os.listdir(os.getcwd()):
+        with open('cookies.pickle', 'rb') as f:
+            cookies = pickle.load(f)
+        for c in cookies:
+            b.add_cookie(c)
     blank_keys = b.find_element_by_css_selector('form>div>input')
     button_submit = b.find_element_by_css_selector('form>button')
     df = pd.read_excel(fn)
     # df['citations'] = pd.Series(['' for _ in range(df.shape[0])], index=df.index)
     for i, r in df.iterrows():
-        if i < 84:  # resume point
+        if i < 128:  # resume point
             continue
 
-        title = r['title'].replace('\n', ' ')
+        # check whether is has been crawled already
+        citations_record = r['citations']
+        citation_no_previous = int(r['citation_count'])
+        if not pd.isnull(citations_record):
+            if len(citations_record.split('\n')) == citation_no_previous:
+                print('#{} has been crawled already'.format(i))
+                continue
+
+        # only deal with relevant ones
+        if pd.isnull(r['relevant']):
+            continue
+
+        # deal with those with abnormal spaces
+        title = ' '.join(r['title'].split())
         print('#{}, {}'.format(i, title))
         df.loc[i, 'title'] = title
 
@@ -88,11 +103,15 @@ def citations_google(fn, b=None):
         if len(result_box) == 1:
             result_index = 0
         else:
-            result_index = int(input('  *found multiple results, input the index (404 to skip): '))
+            result_index = int(input('      *found multiple results, input the index (404 to skip): '))
             if result_index == 404:
+                blank_keys = b.find_element_by_css_selector('form>div>input')
+                blank_keys.clear()
+                button_submit = b.find_element_by_css_selector('form>button')
                 continue
-        title_found = result_box[result_index].find_element_by_css_selector('h3.gs_rt>a').text
-        print(' *found the paper: {}'.format(title_found), end=' ')
+        title_found = result_box[result_index].find_elements_by_css_selector('h3.gs_rt>*')
+        title_found = ' '.join([i.text for i in title_found])
+        print('     *found the paper: {}'.format(title_found))
 
         # parse the citation info
         info = result_box[result_index].find_elements_by_css_selector('div.gs_fl>a')
@@ -101,21 +120,29 @@ def citations_google(fn, b=None):
             if '被引用次数' in seg.text:
                 citation_no = seg.text.split('：')[-1].strip()
                 citation_no = int(citation_no)
-                print('with citations {}'.format(citation_no))
+                print('     *with citations {}'.format(citation_no), end=' ')
                 if not click_with_check_bot(b, seg, df, file_to_save):
                     return b, df
                 break
 
         # update the citation count and crawl citations
         if citation_no == -1:
-            print('with 0 citations')
+            print('     *with 0 citations')
+            if citation_no_previous > 0:
+                print('     !!! the record shows nonzero citations, manually check')
+                if input('stop? no to continue. y/n ') == 'y':
+                    return b, df
+                else:
+                    blank_keys = b.find_element_by_css_selector('form>div>input')
+                    blank_keys.clear()
+                    button_submit = b.find_element_by_css_selector('form>button')
+                    continue
         else:
-            citation_no_previous = int(r['citation_count'])
             if citation_no == citation_no_previous:
-                print(' --the same citation count with record.', end=' ')
+                print('     --the same citation count with record.', end=' ')
             else:
                 df.loc[i, 'citation_count'] = citation_no
-                print(' --updated the citation count.', end=' ')
+                print('     --updated the citation count.', end=' ')
             # crawl citations
             citations = parse_titles(b)
             try:
@@ -136,7 +163,10 @@ def citations_google(fn, b=None):
             else:
                 print('\n\nSomething goes wrong.')
                 print('\n'.join(citations))
-                break
+                if input('stop? no to continue. y/n ') == 'y':
+                    return b, df
+                else:
+                    break
 
         blank_keys = b.find_element_by_css_selector('form>div>input')
         blank_keys.clear()
@@ -163,7 +193,7 @@ if __name__ == '__main__':
     # filter_abstract()
     br = webdriver.Chrome()
     # file_name = 'papers_key_ab - exclude chapter.xlsx'
-    file_name = 'updated_citations_2.xlsx'
+    file_name = 'final.xlsx'
     br, data = citations_google(fn=file_name, b=br)
 
 
